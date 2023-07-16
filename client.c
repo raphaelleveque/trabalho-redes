@@ -81,7 +81,7 @@ int main() {
             flag_ctrl_c = 0;
         }
     }
-    printf("\nChat ended\n");
+    printf("\nThe chat has ended!\n");
 
     close(client_socket);
     return 0;
