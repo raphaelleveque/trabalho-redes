@@ -54,6 +54,7 @@ int main() {
 
     send(client_socket, name, NAME_LEN, 0);
     printf("=== Welcome to the safest WhatsApp ===\n");
+    printf("To join a private chat Type '/join #<private-chat-name>'\n");
 
     // creating threads to send and receive messages
     pthread_t thread_send;
@@ -123,8 +124,8 @@ void *send_msg_handler() {
                 printf("%s\n", name);
             }
 
-            sprintf(buffer, "%s\n", msg);
-            printf("mensagem: %s\n", msg);
+            sprintf(buffer, "%s", msg);
+            printf("%s: %s\n", name, msg);
             send(client_socket, buffer, strlen(buffer), 0);
             str_free_tokens(tokens);
         }
@@ -145,8 +146,8 @@ void *recv_msg_handler() {
         if (receive == 0)
             break;
         if (receive > 0) {
-            // str_trim_lf(buff);
-            printf("%s\n", buff);
+            //str_trim_lf(buff);
+            printf("%s", buff);
             str_overwrite_stdout();
 
             bzero(buff, BUFF_LEN);
