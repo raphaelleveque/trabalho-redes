@@ -5,18 +5,25 @@ volatile sig_atomic_t flag_exit = 1;
 int client_socket = 0;
 char name[NAME_LEN];
 
-void catch_ctrl_c(int sig);
+void try_quit(int sig);
 void catch_exit(int sig);
-int set_name();
-void *send_msg_handler();
-void *recv_msg_handler();
+void *process_send_message();
+void *process_message_receiving();
 
 int main() {
     clear_icanon();
-    signal(SIGINT, catch_ctrl_c);
+    signal(SIGINT, try_quit);
 
-    if (set_name())
+    printf("Please enter your name: ");
+    fgets(name, NAME_LEN, stdin);
+    name[strlen(name) - 1] = '\0';
+    printf("%s\n", name);
+
+    if (strlen(name) > NAME_LEN || strlen(name) < 2) {
+        printf("Name must be less than 30 and more than 2 characters.\n");
         return EXIT_FAILURE;
+    }
+    printf("Type '/connect' to connect or '/quit' to quit\n");
 
     // Wait for /connect command
     char msg[10];
@@ -37,10 +44,13 @@ int main() {
                 printf("Try typing \"/connect\"");
             }
             return 0;
-        };
+        }
     }
 
-    check((client_socket = socket(AF_INET, SOCK_STREAM, 0)), "Failed to create socket!");
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket == -1) {
+        perror("Failed to create socket!");
+    }
 
     // Set port and IP the same as server-side:
     SA_IN server_addr;
@@ -53,15 +63,15 @@ int main() {
     printf("Connected with server successfully\n");
 
     send(client_socket, name, NAME_LEN, 0);
-    printf("=== Welcome to the safest WhatsApp ===\n");
+    printf("=== Welcome to the safest Chat ===\n");
     printf("To join a private chat Type '/join #<private-chat-name>'\n");
 
     // creating threads to send and receive messages
     pthread_t thread_send;
-    pthread_create(&thread_send, NULL, (void *)send_msg_handler, NULL);
+    pthread_create(&thread_send, NULL, (void *)process_send_message, NULL);
 
     pthread_t thread_recv;
-    pthread_create(&thread_recv, NULL, (void *)recv_msg_handler, NULL);
+    pthread_create(&thread_recv, NULL, (void *)process_message_receiving, NULL);
 
     // If SIGNAL is active
     while (flag_exit) {
@@ -78,7 +88,7 @@ int main() {
 }
 
 /* SIGNAL to unable CTRL+C */
-void catch_ctrl_c(int sig) {
+void try_quit(int sig) {
     flag_ctrl_c = 1;
 }
 
@@ -87,23 +97,8 @@ void catch_exit(int sig) {
     flag_exit = 0;
 }
 
-/* Set self client name */
-int set_name() {
-    printf("Please enter your name: ");
-    fgets(name, NAME_LEN, stdin);
-    name[strlen(name) - 1] = '\0';
-    printf("%s\n", name);
-
-    if (strlen(name) > NAME_LEN || strlen(name) < 2) {
-        printf("Name must be less than 30 and more than 2 characters.\n");
-        return EXIT_FAILURE;
-    }
-    printf("Type '/connect' to connect or '/quit' to quit\n");
-    return 0;
-}
-
 /* Thread function to send messages */
-void *send_msg_handler() {
+void *process_send_message() {
     char msg[MSG_LEN];
     char buffer[BUFF_LEN];
 
@@ -138,7 +133,7 @@ void *send_msg_handler() {
 }
 
 /* Thread function to receive messages */
-void *recv_msg_handler() {
+void *process_message_receiving() {
     char buff[BUFF_LEN];
 
     while (1) {
@@ -148,7 +143,8 @@ void *recv_msg_handler() {
         if (receive > 0) {
             //str_trim_lf(buff);
             printf("%s", buff);
-            str_overwrite_stdout();
+            printf("\r%s", "> ");
+            fflush(stdout);
 
             bzero(buff, BUFF_LEN);
         }
