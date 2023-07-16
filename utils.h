@@ -28,12 +28,9 @@
 typedef struct sockaddr_in SA_IN;
 typedef struct sockaddr SA;
 
-int clear_icanon();
-int check(int exp, const char *msg);
-void str_overwrite_stdout();
-void str_trim_lf (char* arr);
+int disable_canonical_mode();
+int validate_expression(int exp, const char *msg);
 char* _build_token(char**t, int t_size, char c);
 char** str_get_tokens_(char* str, const char d);
-void str_free_tokens(char**tokens);
 
 #endif

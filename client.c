@@ -11,7 +11,7 @@ void *process_send_message();
 void *process_message_receiving();
 
 int main() {
-    clear_icanon();
+    disable_canonical_mode();
     signal(SIGINT, try_quit);
 
     printf("Please enter your name: ");
@@ -59,7 +59,7 @@ int main() {
     server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
     // Send connection request to server:
-    check((connect(client_socket, (SA *)&server_addr, sizeof(server_addr))), "Unable to connect");
+    validate_expression((connect(client_socket, (SA *)&server_addr, sizeof(server_addr))), "Unable to connect");
     printf("Connected with server successfully\n");
 
     send(client_socket, name, NAME_LEN, 0);
@@ -77,7 +77,8 @@ int main() {
     while (flag_exit) {
         if (flag_ctrl_c) {
             printf("\n Type '/quit' to end connection \n");
-            str_overwrite_stdout();
+            printf("\r%s", "> ");
+            fflush(stdout);
             flag_ctrl_c = 0;
         }
     }
@@ -103,9 +104,9 @@ void *process_send_message() {
     char buffer[BUFF_LEN];
 
     while (1) {
-        str_overwrite_stdout();
+        printf("\r%s", "> ");
+        fflush(stdout);
         fgets(msg, MSG_LEN, stdin);
-        // str_trim_lf(msg);
         msg[strlen(msg) - 1] = '\0';
 
         if (strlen(msg) == 0 || strcmp(msg, "/quit") == 0)
@@ -122,7 +123,9 @@ void *process_send_message() {
             sprintf(buffer, "%s", msg);
             printf("%s: %s\n", name, msg);
             send(client_socket, buffer, strlen(buffer), 0);
-            str_free_tokens(tokens);
+            for (int i = 0; tokens[i]; i++)
+                free(tokens[i]);
+            free(tokens);
         }
 
         bzero(msg, MSG_LEN);
@@ -141,7 +144,6 @@ void *process_message_receiving() {
         if (receive == 0)
             break;
         if (receive > 0) {
-            //str_trim_lf(buff);
             printf("%s", buff);
             printf("\r%s", "> ");
             fflush(stdout);

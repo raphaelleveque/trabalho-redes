@@ -1,6 +1,6 @@
 #include "utils.h"
 
-int clear_icanon()
+int disable_canonical_mode()
 {
     struct termios settings;
     int result;
@@ -20,31 +20,18 @@ int clear_icanon()
     return 1;
 }
 
-void str_trim_lf (char *arr){
-    for(int i = 0; i < strlen(arr); i++){
-        if(arr[i == '\n']){
-            arr[i] = '\0';
-            //arr[i] = '\0';
-            break;
-        }
-    }
-}
 
-int check(int exp, const char *msg)
+int validate_expression(int exp, const char *msg)
 {
     if (exp == SOCKETERROR)
     {
         perror(msg);
         exit(1);
+    } else {
+        return exp;
     }
-    return exp;
 }
 
-void str_overwrite_stdout()
-{
-    printf("\r%s", "> ");
-    fflush(stdout);
-}
 
 char *_build_token(char **t, int t_size, char c)
 {
@@ -78,11 +65,4 @@ char **str_get_tokens_(char *str, const char d)
 
     tokens[i] = _build_token(&tokens[i], token_size, '\0');
     return tokens;
-}
-
-void str_free_tokens(char **tokens)
-{
-    for (int i = 0; tokens[i]; i++)
-        free(tokens[i]);
-    free(tokens);
 }

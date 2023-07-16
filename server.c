@@ -81,7 +81,7 @@ int find_channel(char* str) {
 int add_client_to_channel(char* str, client_t* cli) {
 	pthread_mutex_lock(&channels_mutex);
 
-    // checks if channel name is valid
+    // validate_expressions if channel name is valid
     if (str[0] != '#' && str[0] != '&') {
 	    pthread_mutex_unlock(&channels_mutex);
         return 0;
@@ -176,7 +176,7 @@ void send_message(char *s, client_t* cli){
 	for(int i = 0; i < MAX_CLI_PER_CHANNEL; ++i){
 		if(channels[idx]->connected_cli[i] && channels[idx]->connected_cli[i] != cli && channels[idx]->connected_cli[i]->kick == 0){
             
-            int bytes_sent = check(write(channels[idx]->connected_cli[i]->sockfd, s, strlen(s)),"ERROR: write to descriptor failed");
+            int bytes_sent = validate_expression(write(channels[idx]->connected_cli[i]->sockfd, s, strlen(s)),"ERROR: write to descriptor failed");
                 
             if (bytes_sent == 0) {
                 close(channels[idx]->connected_cli[i]->sockfd);
@@ -192,7 +192,7 @@ void send_message(char *s, client_t* cli){
 int setup_server(int port, int backlog, SA_IN* server_addr) {
     int server_socket;
 
-    check((server_socket = socket(AF_INET, SOCK_STREAM, 0)), "Failed to create socket!");
+    validate_expression((server_socket = socket(AF_INET, SOCK_STREAM, 0)), "Failed to create socket!");
 
     // initialize the address struct
     (*server_addr).sin_family = AF_INET;
@@ -200,10 +200,10 @@ int setup_server(int port, int backlog, SA_IN* server_addr) {
     (*server_addr).sin_addr.s_addr = inet_addr("127.0.0.1");
 
     signal(SIGPIPE, SIG_IGN);
-    check(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)), "setsockopt(SO_REUSEADDR) failed");
+    validate_expression(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)), "setsockopt(SO_REUSEADDR) failed");
 
-    check(bind(server_socket, (SA*)server_addr, sizeof(*server_addr)), "Bind Failed");
-    check(listen(server_socket, backlog), "Listen Failed");
+    validate_expression(bind(server_socket, (SA*)server_addr, sizeof(*server_addr)), "Bind Failed");
+    validate_expression(listen(server_socket, backlog), "Listen Failed");
 
     printf("Listening on: %s:%d\n", inet_ntoa((*server_addr).sin_addr), ntohs((*server_addr).sin_port));
 
@@ -215,11 +215,11 @@ int accept_new_connection(int server_socket, SA_IN* client_addr) {
     socklen_t addr_size = sizeof(*client_addr);
     int client_socket;
     
-    check(client_socket = accept(server_socket, (SA*)client_addr, &addr_size), "Accept failed");
+    validate_expression(client_socket = accept(server_socket, (SA*)client_addr, &addr_size), "Accept failed");
 
-    check(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)), "setsockopt(SO_REUSEADDR) failed");
+    validate_expression(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)), "setsockopt(SO_REUSEADDR) failed");
 
-    // Check limit number of clients
+    // validate_expression limit number of clients
     if((n_clients + 1) == MAX_CLIENTS) {
         printf("Max clients reached, bye bye: ");
         printf("%s:%d\n", inet_ntoa((*client_addr).sin_addr), ntohs((*client_addr).sin_port));
@@ -254,13 +254,13 @@ void* handle_client(void *arg) {
     bzero(buffer_out, BUFF_LEN);
     while (1) {
         if (cli->kick) break;
-        str_overwrite_stdout();
+        printf("\r%s", "> ");
+        fflush(stdout);
         
         int command = 0;
         int receive = recv(cli->sockfd, msg, MSG_LEN, 0);
         if (cli->kick) break;
         if (receive > 0) {
-            //str_trim_lf(msg);
 
             int n_tokens = 0;
             char** tokens = str_get_tokens_(msg, ' ');
@@ -270,7 +270,7 @@ void* handle_client(void *arg) {
             }
 
             if (strcmp(msg, "/ping\n") == 0) {
-                check(write(cli->sockfd, "server: pong\n", strlen("server: pong\n")),"ERROR: write to descriptor failed");
+                validate_expression(write(cli->sockfd, "server: pong\n", strlen("server: pong\n")),"ERROR: write to descriptor failed");
                 sprintf(buffer_out, "%s: %s\n", name, msg);
                 printf("%s", buffer_out);
                 command = 1;
@@ -280,12 +280,12 @@ void* handle_client(void *arg) {
                     if (add_client_to_channel(tokens[1], cli)) {
 
                         sprintf(buffer_out, "%s joined channel %s\n", name, tokens[1]);
-                        check(write(cli->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
+                        validate_expression(write(cli->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
                         printf("%s", buffer_out);
                     }
                     else {
                         sprintf(buffer_out, "channel %s is invalid or full\n", tokens[1]);
-                        check(write(cli->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
+                        validate_expression(write(cli->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
                         printf("%s", buffer_out);
                     }
                     command = 1;
@@ -333,7 +333,7 @@ void* handle_client(void *arg) {
                     }
                     else if (strcmp(tokens[0], "/whois") == 0) {
                         sprintf(buffer_out, "%s IPv4 is %s\n", tokens[1], inet_ntoa(channels[cnl_idx]->connected_cli[cli_idx]->address.sin_addr));
-                        check(write(cli->sockfd, buffer_out, BUFF_LEN),"ERROR: write to descriptor failed");
+                        validate_expression(write(cli->sockfd, buffer_out, BUFF_LEN),"ERROR: write to descriptor failed");
                         command = 1;
                     }
                 }
@@ -343,7 +343,9 @@ void* handle_client(void *arg) {
                 send_message(buffer_out, cli);
                 printf("%s",buffer_out);
             }
-            str_free_tokens(tokens);
+            for (int i = 0; tokens[i]; i++)
+                free(tokens[i]);
+            free(tokens);
         }
         else if(receive == 0 || strcmp(msg, "/quit") == 0) {
             sprintf(buffer_out, "%s has left\n", cli->name);
@@ -369,7 +371,7 @@ void* handle_client(void *arg) {
 }
 
 int main() {
-    clear_icanon();
+    disable_canonical_mode();
     SA_IN* client_addr = (SA_IN*)malloc(sizeof(SA_IN));
     SA_IN* server_addr = (SA_IN*)malloc(sizeof(SA_IN));
 
