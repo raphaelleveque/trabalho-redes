@@ -375,7 +375,7 @@ int main() {
 
     int server_socket = setup_server(SERVERPORT, SERVER_BACKLOG, server_addr);
 
-    printf("=== WELCOME TO ZAP ZAP ===\n");
+    printf("=== Welcome to the safest WhatsApp ===\n");
 
     while (1) {
         pthread_t thread = NULL;
