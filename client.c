@@ -4,7 +4,7 @@ volatile sig_atomic_t flag_ctrl_c = 0;
 volatile sig_atomic_t flag_exit = 1;
 int client_socket = 0;
 char name[NAME_LEN];
-
+ 
 void try_quit(int sig);
 void catch_exit(int sig);
 void *process_send_message();
@@ -114,7 +114,7 @@ void *process_send_message() {
         else {
             char **tokens = str_get_tokens_(msg, ' ');
 
-            if (strcmp(tokens[0], "/nickname\n") == 0) {
+            if (strcmp(tokens[0], "/nickname") == 0) {
                 printf("%s nickname updated to ", name);
                 strcpy(name, tokens[1]);
                 printf("%s\n", name);

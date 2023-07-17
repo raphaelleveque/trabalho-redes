@@ -269,7 +269,7 @@ void* handle_client(void *arg) {
                 n_tokens++;
             }
 
-            if (strcmp(msg, "/ping\n") == 0) {
+            if (strcmp(msg, "/ping") == 0) {
                 validate_expression(write(cli->sockfd, "server: pong\n", strlen("server: pong\n")),"ERROR: write to descriptor failed");
                 sprintf(buffer_out, "%s: %s\n", name, msg);
                 printf("%s", buffer_out);
@@ -298,12 +298,12 @@ void* handle_client(void *arg) {
                     command = 1;
                 }
                 else if (cli->is_admin && (strcmp(tokens[0], "/kick") == 0 || strcmp(tokens[0], "/mute") == 0 || strcmp(tokens[0], "/unmute") == 0 || strcmp(tokens[0], "/whois") == 0)) {
-                    printf("command admin");
+                    printf("command admin\n");
                     int adm_idx;
                     int adm_cnl = find_channel_and_client(cli->name, &adm_idx);
 
                     int cli_idx;
-                    tokens[1][strlen(tokens[1]) - 1] = '\0';
+                    tokens[1][strlen(tokens[1])] = '\0';
                     int cnl_idx = find_channel_and_client(tokens[1], &cli_idx);
 
                     if (cnl_idx != adm_cnl || cnl_idx < 0) {
