@@ -1,33 +1,108 @@
 #include "utils.h"
 
-static _Atomic unsigned int n_clients = 0;
-static int uid = 10;
+// Variáveis globais
+static _Atomic unsigned int n_clients = 0; // Número de clientes conectados
+static int uid = 10; // Próximo ID de usuário disponível
+
+// Definição de estruturas de dados
+typedef struct {
+    SA_IN address; // Endereço do cliente
+    int sockfd; // Descritor do socket do cliente
+    int uid; // ID único do cliente
+    char name[NAME_LEN]; // Nome do cliente
+    int is_admin; // Indica se o cliente é um administrador
+    int is_muted; // Indica se o cliente está mudo
+    int kick; // Indica se o cliente foi removido do chat
+    pthread_t thread; // Thread associada ao cliente
+} client_t; // Estrutura que representa um cliente
 
 typedef struct {
-    SA_IN address;
-    int sockfd;
-    int uid;
-    char name[NAME_LEN];
-    int is_admin;
-    int is_muted;
-    int kick;
-    pthread_t thread;
-} client_t;
+    char key[CNL_LEN]; // Nome do canal
+    client_t* connected_clients[MAX_CLIENTS_PER_CHANNEL]; // Lista de clientes conectados ao canal
+    int num_clients; // Número de clientes conectados ao canal
+    int admin_id; // ID do administrador do canal
+} channel_t; // Estrutura que representa um canal de chat
 
-typedef struct {
-    char key[CNL_LEN];
-    client_t* connected_cli[MAX_CLIENTS];
-    int n_cli;
-    int admin_id;
-} channel_t;
+client_t* clients[MAX_CLIENTS]; // Array de todos os clientes conectados
+channel_t* channels[MAX_CHANNELS]; // Array de todos os canais criados
 
-client_t* clients[MAX_CLI_PER_CHANNEL];
-channel_t* channels[MAX_CHANNELS];
+// besteirinhas pra imprimir a ascii art
+#define MAX_LEN 128
+void print_image(FILE *fptr); 
 
-pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t channels_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER; // Mutex para proteger operações com clientes
+pthread_mutex_t channels_mutex = PTHREAD_MUTEX_INITIALIZER; // Mutex para proteger operações com canais
 
-/* Returns index of client in array */
+// Funções de busca
+int find_client(client_t* client); // Retorna o índice de um cliente no array all_clients
+int find_channel_of_client(client_t* client); // Retorna o índice do canal que contém o cliente especificado
+int find_channel_and_client(char* name, int* client_idx); // Retorna o índice do canal e do cliente com o nome especificado
+int find_channel(char* name); // Retorna o índice do canal com o nome especificado
+
+// Funções para manipular canais e clientes
+int add_client_to_channel(char* name, client_t* client); // Adiciona um cliente a um canal
+void remove_client_from_channel(int channel_idx, client_t* client); // Remove um cliente de um canal
+void queue_add(client_t* client); // Adiciona um cliente à fila
+void queue_remove(int uid); // Remove um cliente da fila
+
+// Função para enviar mensagem para todos os clientes no canal, exceto o remetente
+void send_message_to_channel(char* message, client_t* sender);
+
+// Funções para configurar e aceitar conexões do servidor
+int setup_server(int port, int backlog, SA_IN* server_addr); // Configura o socket do servidor
+int accept_new_connection(int server_socket, SA_IN* client_addr); // Aceita uma nova conexão
+
+// Função da thread para lidar com cada cliente
+void* handle_client(void *arg);
+
+int main() {
+    disable_canonical_mode();
+    SA_IN* client_addr = (SA_IN*)malloc(sizeof(SA_IN));
+    SA_IN* server_addr = (SA_IN*)malloc(sizeof(SA_IN));
+
+    int server_socket = setup_server(SERVERPORT, SERVER_BACKLOG, server_addr);
+
+    printf("=== Welcome to the safest Chat ===\n");
+    char *filename = "image.txt";
+    FILE *fptr = NULL;
+ 
+    if((fptr = fopen(filename,"r")) == NULL)
+    {
+        fprintf(stderr,"error opening %s\n",filename);
+        return 1;
+    }
+ 
+    print_image(fptr);
+ 
+    fclose(fptr);
+
+    while (1) {
+        pthread_t thread = NULL;
+        int client_socket;
+        if((client_socket = accept_new_connection(server_socket, client_addr)) < 0) continue;
+
+        // inicializando a struct do cliente
+        client_t* cli = (client_t *) malloc(sizeof(client_t));
+        cli->address = *client_addr;
+        cli->sockfd = client_socket;
+        cli->uid = uid++;
+        cli->is_admin = 0;
+        cli->is_muted = 0;
+        cli->kick = 0;
+        cli->thread = thread;
+        
+        queue_add(cli);
+
+        pthread_create(&thread, NULL, &handle_client,(void*)cli);
+
+        sleep(1);
+    }
+
+    // Fechando o socket:
+    close(server_socket);
+    return 0;
+}
+ /* Rretorna o índice do cliente */
 int find_client (client_t* cli) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i] && clients[i] == cli) {
@@ -37,12 +112,12 @@ int find_client (client_t* cli) {
     return -1;
 }
 
-/* Returns index of channel with desired client */
+/* Retorna o índice do canal que contém o cliente especificado */
 int find_channel_of_client(client_t* cli) {
     for (int i = 0; i < MAX_CHANNELS; i++) {
         if (channels[i]) {
 
-            for (int j = 0; j < MAX_CLI_PER_CHANNEL; j++) {
+            for (int j = 0; j < MAX_CLIENTS_PER_CHANNEL; j++) {
                 if (channels[i]->connected_cli[j] && channels[i]->connected_cli[j] == cli) {
                     return i;
                 }
@@ -52,12 +127,12 @@ int find_channel_of_client(client_t* cli) {
     return -1;
 }
 
-/* Returns channel and client of desired client name */
+/* Retorna o índice do canal e do cliente com o nome especificado */
 int find_channel_and_client (char* str, int* idx) {
     for (int i = 0; i < MAX_CHANNELS; i++) {
         if (channels[i]) {
 
-            for (int j = 0; j < MAX_CLI_PER_CHANNEL; j++) {
+            for (int j = 0; j < MAX_CLIENTS_PER_CHANNEL; j++) {
                 if (channels[i]->connected_cli[j] && strcmp(channels[i]->connected_cli[j]->name, str) == 0) {
                     *idx = j;
                     return i;
@@ -68,7 +143,7 @@ int find_channel_and_client (char* str, int* idx) {
     return -1;
 }
 
-/* Returns channel of desired name */
+/* Retorna o id do canal buscado pelo nome */
 int find_channel(char* str) {
     for (int i = 0; i < MAX_CHANNELS; i++) {
         if (channels[i] && strcmp(channels[i]->key, str) == 0)
@@ -77,20 +152,19 @@ int find_channel(char* str) {
     return -1;
 }
 
-/* Add clients to channel */
 int add_client_to_channel(char* str, client_t* cli) {
 	pthread_mutex_lock(&channels_mutex);
 
-    // validate_expressions if channel name is valid
+    // valida o nome do canal
     if (str[0] != '#' && str[0] != '&') {
 	    pthread_mutex_unlock(&channels_mutex);
         return 0;
     }
 
-    // looks for existing channel
+    // procura por um canal existente
     int idx;
     if ((idx = find_channel(str)) > -1) {
-        for (int i = 0; i < MAX_CLI_PER_CHANNEL; ++i){
+        for (int i = 0; i < MAX_CLIENTS_PER_CHANNEL; ++i){
             if(!channels[idx]->connected_cli[i]) {
                 channels[idx]->connected_cli[i] = cli;
                 channels[idx]->n_cli++;
@@ -99,7 +173,7 @@ int add_client_to_channel(char* str, client_t* cli) {
             }                          
         }
 	}
-    // create new channel
+    // cria novo canal
     else {
         channel_t* new_cnl = malloc(sizeof(*new_cnl));
         strcpy(new_cnl->key, str);
@@ -119,11 +193,10 @@ int add_client_to_channel(char* str, client_t* cli) {
     return 0;
 }
 
-/* Remove client from channel */
 void remove_client_from_channel(int idx, client_t* cli) {
 	pthread_mutex_lock(&channels_mutex);
     
-    for (int i = 0; i < MAX_CLI_PER_CHANNEL; i++) {
+    for (int i = 0; i < MAX_CLIENTS_PER_CHANNEL; i++) {
         if (channels[idx]->connected_cli[i] && channels[idx]->connected_cli[i] == cli) {
             channels[idx]->connected_cli[i] = NULL;
             channels[idx]->n_cli--;
@@ -137,7 +210,7 @@ void remove_client_from_channel(int idx, client_t* cli) {
 	pthread_mutex_unlock(&channels_mutex);
 }
 
-/* Add clients to queue */
+/* Adiciona um cliente à fila */
 void queue_add(client_t *cl){
 	pthread_mutex_lock(&clients_mutex);
 	for(int i = 0; i < MAX_CLIENTS; ++i){
@@ -149,7 +222,7 @@ void queue_add(client_t *cl){
 	pthread_mutex_unlock(&clients_mutex);
 }
 
-/* Remove clients to queue */
+/* Remove um cliente da fila */
 void queue_remove(int uid){
 	pthread_mutex_lock(&clients_mutex);
 	for(int i = 0; i < MAX_CLIENTS; ++i){
@@ -162,7 +235,7 @@ void queue_remove(int uid){
 }
 
 
-/* Send message to all clients in channel except sender */
+/* Função para enviar mensagem para todos os clientes no canal, exceto o remetente */
 void send_message(char *s, client_t* cli){
     if (cli->is_muted) return;
 	pthread_mutex_lock(&clients_mutex);
@@ -173,7 +246,7 @@ void send_message(char *s, client_t* cli){
         return;
     }
 
-	for(int i = 0; i < MAX_CLI_PER_CHANNEL; ++i){
+	for(int i = 0; i < MAX_CLIENTS_PER_CHANNEL; ++i){
 		if(channels[idx]->connected_cli[i] && channels[idx]->connected_cli[i] != cli && channels[idx]->connected_cli[i]->kick == 0){
             
             int bytes_sent = validate_expression(write(channels[idx]->connected_cli[i]->sockfd, s, strlen(s)),"ERROR: write to descriptor failed");
@@ -188,13 +261,13 @@ void send_message(char *s, client_t* cli){
 	pthread_mutex_unlock(&clients_mutex);
 }
 
-/* Build server socket */
+/* Configura o socket do servidor */
 int setup_server(int port, int backlog, SA_IN* server_addr) {
     int server_socket;
 
     validate_expression((server_socket = socket(AF_INET, SOCK_STREAM, 0)), "Failed to create socket!");
 
-    // initialize the address struct
+    // inicializa a struct de endereço
     (*server_addr).sin_family = AF_INET;
     (*server_addr).sin_port = htons(SERVERPORT);
     (*server_addr).sin_addr.s_addr = inet_addr("127.0.0.1");
@@ -210,7 +283,7 @@ int setup_server(int port, int backlog, SA_IN* server_addr) {
     return server_socket;
 }
 
-/* Accept connection */
+/* Aceita nova conexão */
 int accept_new_connection(int server_socket, SA_IN* client_addr) {
     socklen_t addr_size = sizeof(*client_addr);
     int client_socket;
@@ -233,14 +306,14 @@ int accept_new_connection(int server_socket, SA_IN* client_addr) {
     return client_socket;
 }
 
-/* Thread function to handle each client */
+/* Função da thread para lidar com cada cliente */
 void* handle_client(void *arg) {
     char msg[MSG_LEN];
     char buffer_out[BUFF_LEN];
     char name[NAME_LEN];
     client_t *cli = (client_t *) arg;
 
-    // get client name
+    // lendo nome do cliente
     if (recv(cli->sockfd, name, NAME_LEN, 0) <= 0 || strlen(name) < 2 || strlen(name) >= NAME_LEN - 1) {
         printf("Failed to get name or invalid name\n");
         cli->kick = 1;
@@ -265,7 +338,6 @@ void* handle_client(void *arg) {
             int n_tokens = 0;
             char** tokens = str_get_tokens_(msg, ' ');
             for (int i = 0; tokens[i]; i++) {
-                //printf("%d: \'%s\'\n", i, tokens[i]);
                 n_tokens++;
             }
 
@@ -298,7 +370,7 @@ void* handle_client(void *arg) {
                     command = 1;
                 }
                 else if (cli->is_admin && (strcmp(tokens[0], "/kick") == 0 || strcmp(tokens[0], "/mute") == 0 || strcmp(tokens[0], "/unmute") == 0 || strcmp(tokens[0], "/whois") == 0)) {
-                    printf("command admin\n");
+                    printf("command admin");
                     int adm_idx;
                     int adm_cnl = find_channel_and_client(cli->name, &adm_idx);
 
@@ -370,38 +442,9 @@ void* handle_client(void *arg) {
     return NULL;
 }
 
-int main() {
-    disable_canonical_mode();
-    SA_IN* client_addr = (SA_IN*)malloc(sizeof(SA_IN));
-    SA_IN* server_addr = (SA_IN*)malloc(sizeof(SA_IN));
-
-    int server_socket = setup_server(SERVERPORT, SERVER_BACKLOG, server_addr);
-
-    printf("=== Welcome to the safest Chat ===\n");
-
-    while (1) {
-        pthread_t thread = NULL;
-        int client_socket;
-        if((client_socket = accept_new_connection(server_socket, client_addr)) < 0) continue;
-
-        // setting client struct
-        client_t* cli = (client_t *) malloc(sizeof(client_t));
-        cli->address = *client_addr;
-        cli->sockfd = client_socket;
-        cli->uid = uid++;
-        cli->is_admin = 0;
-        cli->is_muted = 0;
-        cli->kick = 0;
-        cli->thread = thread;
-        
-        queue_add(cli);
-
-        pthread_create(&thread, NULL, &handle_client,(void*)cli);
-
-        sleep(1);
-    }
-
-    // Closing the socket:
-    close(server_socket);
-    return 0;
+void print_image(FILE *fptr){
+    char read_string[MAX_LEN];
+ 
+    while(fgets(read_string,sizeof(read_string),fptr) != NULL)
+        printf("%s",read_string);
 }
