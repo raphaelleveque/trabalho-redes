@@ -34,3 +34,4 @@ char* _build_token(char**token, int token_size, char c);
 char** get_tokens_from_string(char* string, const char delimiter);
 
 #endif
+#endif

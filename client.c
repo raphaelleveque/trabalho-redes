@@ -167,7 +167,3 @@ void *process_message_receiving() {
     flag_exit = 0; // Seta flag_exit para 0 indicando que o processo deve sair
     return NULL;
 }
-
-void handle_ctrlC(){
-    flag_ctrl_c = 1;
-}
