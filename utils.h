@@ -14,7 +14,7 @@
 #include <limits.h>
 
 #define NAME_LEN 50
-#define CNL_LEN 200
+#define CHANNEL_LEN 200
 #define MSG_LEN 4096
 #define BUFF_LEN (MSG_LEN + NAME_LEN + 4)
 #define PORT 1337
@@ -29,8 +29,8 @@ typedef struct sockaddr_in SA_IN;
 typedef struct sockaddr SA;
 
 int disable_canonical_mode();
-int validate_expression(int exp, const char *msg);
-char* _build_token(char**t, int t_size, char c);
-char** str_get_tokens_(char* str, const char d);
+int validate_expression(int expression, const char *error_messag);
+char* _build_token(char**token, int token_size, char c);
+char** get_tokens_from_string(char* string, const char delimiter);
 
 #endif

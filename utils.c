@@ -1,56 +1,64 @@
 #include "utils.h"
 
+// Função para desabilitar o modo canônico do terminal
 int disable_canonical_mode()
 {
-    struct termios settings;
+    struct termios terminal_settings;
     int result;
-    result = tcgetattr(STDIN_FILENO, &settings);
+
+    result = tcgetattr(STDIN_FILENO, &terminal_settings);
     if (result < 0)
     {
-        perror("error in tcgetattr");
+        perror("Error in tcgetattr");
         return 0;
     }
-    settings.c_lflag &= -ICANON;
-    result = tcsetattr(STDIN_FILENO, TCSANOW, &settings);
+
+    terminal_settings.c_lflag &= ~ICANON;
+    result = tcsetattr(STDIN_FILENO, TCSANOW, &terminal_settings);
     if (result < 0)
     {
-        perror("error in tcsetattr");
+        perror("Error in tcsetattr");
         return 0;
     }
+
     return 1;
 }
 
-
-int validate_expression(int exp, const char *msg)
+// Função para validar uma expressão e lidar com erros relacionados a sockets
+int validate_expression(int expression, const char *error_message)
 {
-    if (exp == SOCKETERROR)
+    if (expression == SOCKETERROR)
     {
-        perror(msg);
+        perror(error_message);
         exit(1);
-    } else {
-        return exp;
+    }
+    else
+    {
+        return expression;
     }
 }
 
-
-char *_build_token(char **t, int t_size, char c)
+// Função auxiliar para construir um token
+char *_build_token(char **token, int token_size, char c)
 {
-    *t = realloc(*t, sizeof(char) * (t_size + 1));
-    (*t)[t_size] = c;
-    return *t;
+    *token = realloc(*token, sizeof(char) * (token_size + 1));
+    (*token)[token_size] = c;
+    return *token;
 }
 
-char **str_get_tokens_(char *str, const char d)
+// Função para obter tokens de uma string com base em um delimitador
+char **get_tokens_from_string(char *string, const char delimiter)
 {
-    if (str == NULL)
+    if (string == NULL)
         return NULL;
 
     char **tokens = calloc(BUFF_LEN / 2, sizeof(*tokens));
     int i = 0;
     int token_size = 0;
-    while (*str != '\0')
+
+    while (*string != '\0')
     {
-        if (*str == d)
+        if (*string == delimiter)
         {
             tokens[i] = _build_token(&tokens[i], token_size, '\0');
             token_size = 0;
@@ -58,9 +66,9 @@ char **str_get_tokens_(char *str, const char d)
         }
         else
         {
-            tokens[i] = _build_token(&tokens[i], token_size++, *str);
+            tokens[i] = _build_token(&tokens[i], token_size++, *string);
         }
-        str++;
+        string++;
     }
 
     tokens[i] = _build_token(&tokens[i], token_size, '\0');

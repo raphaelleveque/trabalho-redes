@@ -1,8 +1,17 @@
+/* 
+SSC0142 - Redes de Computadores
+Trabalho 2 - Internet Relay Chat
+
+Alunos:
+- Thaís Ribeiro Lauriano - 12542518
+- João Pedro Duarte Nunes - 12542460
+- Raphael David Leveque - 12542522 */
+
 #include "utils.h"
 
 // Variáveis globais
-static _Atomic unsigned int n_clients = 0; // Número de clientes conectados
-static int uid = 10; // Próximo ID de usuário disponível
+static _Atomic unsigned int num_clients_connected = 0; // Número de clientes conectados
+static int next_user_id = 10; // Próximo ID de usuário disponível
 
 // Definição de estruturas de dados
 typedef struct {
@@ -14,17 +23,17 @@ typedef struct {
     int is_muted; // Indica se o cliente está mudo
     int kick; // Indica se o cliente foi removido do chat
     pthread_t thread; // Thread associada ao cliente
-} client_t; // Estrutura que representa um cliente
+} Client; // Estrutura que representa um cliente
 
 typedef struct {
-    char key[CNL_LEN]; // Nome do canal
-    client_t* connected_clients[MAX_CLIENTS_PER_CHANNEL]; // Lista de clientes conectados ao canal
+    char key[CHANNEL_LEN]; // Nome do canal
+    Client* connected_clients[MAX_CLIENTS_PER_CHANNEL]; // Lista de clientes conectados ao canal
     int num_clients; // Número de clientes conectados ao canal
     int admin_id; // ID do administrador do canal
-} channel_t; // Estrutura que representa um canal de chat
+} Channel; // Estrutura que representa um canal de chat
 
-client_t* clients[MAX_CLIENTS]; // Array de todos os clientes conectados
-channel_t* channels[MAX_CHANNELS]; // Array de todos os canais criados
+Client* clients[MAX_CLIENTS]; // Array de todos os clientes conectados
+Channel* channels[MAX_CHANNELS]; // Array de todos os canais criados
 
 // besteirinhas pra imprimir a ascii art
 #define MAX_LEN 128
@@ -34,19 +43,19 @@ pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER; // Mutex para protege
 pthread_mutex_t channels_mutex = PTHREAD_MUTEX_INITIALIZER; // Mutex para proteger operações com canais
 
 // Funções de busca
-int find_client(client_t* client); // Retorna o índice de um cliente no array all_clients
-int find_channel_of_client(client_t* client); // Retorna o índice do canal que contém o cliente especificado
-int find_channel_and_client(char* name, int* client_idx); // Retorna o índice do canal e do cliente com o nome especificado
+int find_client(Client* client); // Retorna o índice de um cliente no array clients
+int find_channel_of_client(Client* client); // Retorna o índice do canal que contém o cliente especificado
+int find_channel_and_client(char* name, int* client_id); // Retorna o índice do canal e do cliente com o nome especificado
 int find_channel(char* name); // Retorna o índice do canal com o nome especificado
 
 // Funções para manipular canais e clientes
-int add_client_to_channel(char* name, client_t* client); // Adiciona um cliente a um canal
-void remove_client_from_channel(int channel_idx, client_t* client); // Remove um cliente de um canal
-void queue_add(client_t* client); // Adiciona um cliente à fila
-void queue_remove(int uid); // Remove um cliente da fila
+int add_client_to_channel(char* channel_name, Client* client); // Adiciona um cliente a um canal
+void remove_client_from_channel(int channel_id, Client* client); // Remove um cliente de um canal
+void enqueue_client(Client* client); // Adiciona um cliente à fila de clientes
+void dequeue_client(int uid); // Remove um cliente da fila de clientes
 
 // Função para enviar mensagem para todos os clientes no canal, exceto o remetente
-void send_message_to_channel(char* message, client_t* sender);
+void send_message(char* message, Client* sender);
 
 // Funções para configurar e aceitar conexões do servidor
 int setup_server(int port, int backlog, SA_IN* server_addr); // Configura o socket do servidor
@@ -81,19 +90,19 @@ int main() {
         int client_socket;
         if((client_socket = accept_new_connection(server_socket, client_addr)) < 0) continue;
 
-        // inicializando a struct do cliente
-        client_t* cli = (client_t *) malloc(sizeof(client_t));
-        cli->address = *client_addr;
-        cli->sockfd = client_socket;
-        cli->uid = uid++;
-        cli->is_admin = 0;
-        cli->is_muted = 0;
-        cli->kick = 0;
-        cli->thread = thread;
+        // Inicializando a struct do cliente
+        Client* client = (Client*) malloc(sizeof(Client));
+        client->address = *client_addr;
+        client->sockfd = client_socket;
+        client->uid = next_user_id++;
+        client->is_admin = 0;
+        client->is_muted = 0;
+        client->kick = 0;
+        client->thread = thread;
         
-        queue_add(cli);
+        enqueue_client(client);
 
-        pthread_create(&thread, NULL, &handle_client,(void*)cli);
+        pthread_create(&thread, NULL, &handle_client,(void*)client);
 
         sleep(1);
     }
@@ -102,10 +111,11 @@ int main() {
     close(server_socket);
     return 0;
 }
- /* Rretorna o índice do cliente */
-int find_client (client_t* cli) {
+
+/* Retorna o índice do cliente no array clients */
+int find_client (Client* client) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i] && clients[i] == cli) {
+        if (clients[i] && clients[i] == client) {
             return i;
         }
     }
@@ -113,12 +123,12 @@ int find_client (client_t* cli) {
 }
 
 /* Retorna o índice do canal que contém o cliente especificado */
-int find_channel_of_client(client_t* cli) {
+int find_channel_of_client(Client* client) {
     for (int i = 0; i < MAX_CHANNELS; i++) {
         if (channels[i]) {
 
             for (int j = 0; j < MAX_CLIENTS_PER_CHANNEL; j++) {
-                if (channels[i]->connected_cli[j] && channels[i]->connected_cli[j] == cli) {
+                if (channels[i]->connected_clients[j] && channels[i]->connected_clients[j] == client) {
                     return i;
                 }
             }
@@ -128,13 +138,13 @@ int find_channel_of_client(client_t* cli) {
 }
 
 /* Retorna o índice do canal e do cliente com o nome especificado */
-int find_channel_and_client (char* str, int* idx) {
+int find_channel_and_client (char* name, int* id) {
     for (int i = 0; i < MAX_CHANNELS; i++) {
         if (channels[i]) {
 
             for (int j = 0; j < MAX_CLIENTS_PER_CHANNEL; j++) {
-                if (channels[i]->connected_cli[j] && strcmp(channels[i]->connected_cli[j]->name, str) == 0) {
-                    *idx = j;
+                if (channels[i]->connected_clients[j] && strcmp(channels[i]->connected_clients[j]->name, name) == 0) {
+                    *id = j;
                     return i;
                 }
             }
@@ -144,121 +154,120 @@ int find_channel_and_client (char* str, int* idx) {
 }
 
 /* Retorna o id do canal buscado pelo nome */
-int find_channel(char* str) {
+int find_channel(char* name) {
     for (int i = 0; i < MAX_CHANNELS; i++) {
-        if (channels[i] && strcmp(channels[i]->key, str) == 0)
+        if (channels[i] && strcmp(channels[i]->key, name) == 0)
             return i;
     }
     return -1;
 }
 
-int add_client_to_channel(char* str, client_t* cli) {
-	pthread_mutex_lock(&channels_mutex);
+int add_client_to_channel(char* channel_name, Client* client) {
+    pthread_mutex_lock(&channels_mutex);
 
     // valida o nome do canal
-    if (str[0] != '#' && str[0] != '&') {
-	    pthread_mutex_unlock(&channels_mutex);
+    if (channel_name[0] != '#' && channel_name[0] != '&') {
+        pthread_mutex_unlock(&channels_mutex);
         return 0;
     }
 
     // procura por um canal existente
-    int idx;
-    if ((idx = find_channel(str)) > -1) {
+    int id;
+    if ((id = find_channel(channel_name)) > -1) {
         for (int i = 0; i < MAX_CLIENTS_PER_CHANNEL; ++i){
-            if(!channels[idx]->connected_cli[i]) {
-                channels[idx]->connected_cli[i] = cli;
-                channels[idx]->n_cli++;
+            if(!channels[id]->connected_clients[i]) {
+                channels[id]->connected_clients[i] = client;
+                channels[id]->num_clients++;
                 pthread_mutex_unlock(&channels_mutex);
                 return 1;
             }                          
         }
-	}
+    }
     // cria novo canal
     else {
-        channel_t* new_cnl = malloc(sizeof(*new_cnl));
-        strcpy(new_cnl->key, str);
-        new_cnl->admin_id = cli->uid;
-        new_cnl->connected_cli[0] = cli;
-        new_cnl->n_cli = 1;
-        cli->is_admin = 1;
+        Channel* new_channel = malloc(sizeof(*new_channel));
+        strcpy(new_channel->key, channel_name);
+        new_channel->admin_id = client->uid;
+        new_channel->connected_clients[0] = client;
+        new_channel->num_clients = 1;
+        client->is_admin = 1;
         for (int i = 0; i < MAX_CHANNELS; i++) {
             if(!channels[i]) {
-                channels[i] = new_cnl;
+                channels[i] = new_channel;
                 pthread_mutex_unlock(&channels_mutex);
                 return 1;
             }
         }
     }
-	pthread_mutex_unlock(&channels_mutex);
+    pthread_mutex_unlock(&channels_mutex);
     return 0;
 }
 
-void remove_client_from_channel(int idx, client_t* cli) {
-	pthread_mutex_lock(&channels_mutex);
+void remove_client_from_channel(int id, Client* client) {
+    pthread_mutex_lock(&channels_mutex);
     
     for (int i = 0; i < MAX_CLIENTS_PER_CHANNEL; i++) {
-        if (channels[idx]->connected_cli[i] && channels[idx]->connected_cli[i] == cli) {
-            channels[idx]->connected_cli[i] = NULL;
-            channels[idx]->n_cli--;
+        if (channels[id]->connected_clients[i] && channels[id]->connected_clients[i] == client) {
+            channels[id]->connected_clients[i] = NULL;
+            channels[id]->num_clients--;
             break;
         }
     }
-    if (channels[idx]->n_cli == 0) {
-        free(channels[idx]);
+    if (channels[id]->num_clients == 0) {
+        free(channels[id]);
     }
 
-	pthread_mutex_unlock(&channels_mutex);
+    pthread_mutex_unlock(&channels_mutex);
 }
 
-/* Adiciona um cliente à fila */
-void queue_add(client_t *cl){
-	pthread_mutex_lock(&clients_mutex);
-	for(int i = 0; i < MAX_CLIENTS; ++i){
-		if(!clients[i]){
-			clients[i] = cl;
-			break;
-		}
-	}
-	pthread_mutex_unlock(&clients_mutex);
+/* Adiciona um cliente à fila de clientes */
+void enqueue_client(Client* client) {
+    pthread_mutex_lock(&clients_mutex);
+    for(int i = 0; i < MAX_CLIENTS; ++i){
+        if(!clients[i]){
+            clients[i] = client;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
 }
 
-/* Remove um cliente da fila */
-void queue_remove(int uid){
-	pthread_mutex_lock(&clients_mutex);
-	for(int i = 0; i < MAX_CLIENTS; ++i){
-		if(clients[i] && clients[i]->uid == uid){
+/* Remove um cliente da fila de clientes */
+void dequeue_client(int uid) {
+    pthread_mutex_lock(&clients_mutex);
+    for(int i = 0; i < MAX_CLIENTS; ++i){
+        if(clients[i] && clients[i]->uid == uid){
             clients[i] = NULL;
             break;
-		}
-	}
-	pthread_mutex_unlock(&clients_mutex);
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
 }
 
-
 /* Função para enviar mensagem para todos os clientes no canal, exceto o remetente */
-void send_message(char *s, client_t* cli){
-    if (cli->is_muted) return;
-	pthread_mutex_lock(&clients_mutex);
+void send_message(char* message, Client* sender) {
+    if (sender->is_muted) return;
+    pthread_mutex_lock(&clients_mutex);
 
-    int idx;
-    if ((idx = find_channel_of_client(cli)) < 0) {
+    int id;
+    if ((id = find_channel_of_client(sender)) < 0) {
         pthread_mutex_unlock(&clients_mutex);
         return;
     }
 
-	for(int i = 0; i < MAX_CLIENTS_PER_CHANNEL; ++i){
-		if(channels[idx]->connected_cli[i] && channels[idx]->connected_cli[i] != cli && channels[idx]->connected_cli[i]->kick == 0){
+    for(int i = 0; i < MAX_CLIENTS_PER_CHANNEL; ++i){
+        if(channels[id]->connected_clients[i] && channels[id]->connected_clients[i] != sender && channels[id]->connected_clients[i]->kick == 0){
             
-            int bytes_sent = validate_expression(write(channels[idx]->connected_cli[i]->sockfd, s, strlen(s)),"ERROR: write to descriptor failed");
+            int bytes_sent = validate_expression(write(channels[id]->connected_clients[i]->sockfd, message, strlen(message)),"ERROR: write to descriptor failed");
                 
             if (bytes_sent == 0) {
-                close(channels[idx]->connected_cli[i]->sockfd);
-                queue_remove(channels[idx]->connected_cli[i]->uid);
-                remove_client_from_channel(idx, cli);
+                close(channels[id]->connected_clients[i]->sockfd);
+                dequeue_client(channels[id]->connected_clients[i]->uid);
+                remove_client_from_channel(id, sender);
             }
         }
-	}
-	pthread_mutex_unlock(&clients_mutex);
+    }
+    pthread_mutex_unlock(&clients_mutex);
 }
 
 /* Configura o socket do servidor */
@@ -292,8 +301,8 @@ int accept_new_connection(int server_socket, SA_IN* client_addr) {
 
     validate_expression(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)), "setsockopt(SO_REUSEADDR) failed");
 
-    // validate_expression limit number of clients
-    if((n_clients + 1) == MAX_CLIENTS) {
+    // Validar limite de número de clientes
+    if((num_clients_connected + 1) == MAX_CLIENTS) {
         printf("Max clients reached, bye bye: ");
         printf("%s:%d\n", inet_ntoa((*client_addr).sin_addr), ntohs((*client_addr).sin_port));
         close(client_socket);
@@ -302,7 +311,7 @@ int accept_new_connection(int server_socket, SA_IN* client_addr) {
 
     printf("Client connected at IP: %s and port: %d\n", inet_ntoa((*client_addr).sin_addr), ntohs((*client_addr).sin_port));
     
-    n_clients++;
+    num_clients_connected++;
     return client_socket;
 }
 
@@ -311,68 +320,68 @@ void* handle_client(void *arg) {
     char msg[MSG_LEN];
     char buffer_out[BUFF_LEN];
     char name[NAME_LEN];
-    client_t *cli = (client_t *) arg;
+    Client *client = (Client *) arg;
 
     // lendo nome do cliente
-    if (recv(cli->sockfd, name, NAME_LEN, 0) <= 0 || strlen(name) < 2 || strlen(name) >= NAME_LEN - 1) {
+    if (recv(client->sockfd, name, NAME_LEN, 0) <= 0 || strlen(name) < 2 || strlen(name) >= NAME_LEN - 1) {
         printf("Failed to get name or invalid name\n");
-        cli->kick = 1;
+        client->kick = 1;
     } else {
-        strcpy(cli->name, name);
-        sprintf(buffer_out, "%s has joined chat\n", cli->name);
+        strcpy(client->name, name);
+        sprintf(buffer_out, "%s has joined chat\n", client->name);
         printf("%s", buffer_out);
-        send_message(buffer_out, cli);
+        send_message(buffer_out, client);
     }
 
     bzero(buffer_out, BUFF_LEN);
     while (1) {
-        if (cli->kick) break;
+        if (client->kick) break;
         printf("\r%s", "> ");
         fflush(stdout);
         
         int command = 0;
-        int receive = recv(cli->sockfd, msg, MSG_LEN, 0);
-        if (cli->kick) break;
+        int receive = recv(client->sockfd, msg, MSG_LEN, 0);
+        if (client->kick) break;
         if (receive > 0) {
 
             int n_tokens = 0;
-            char** tokens = str_get_tokens_(msg, ' ');
+            char** tokens = get_tokens_from_string(msg, ' ');
             for (int i = 0; tokens[i]; i++) {
                 n_tokens++;
             }
 
             if (strcmp(msg, "/ping") == 0) {
-                validate_expression(write(cli->sockfd, "server: pong\n", strlen("server: pong\n")),"ERROR: write to descriptor failed");
+                validate_expression(write(client->sockfd, "server: pong\n", strlen("server: pong\n")),"ERROR: write to descriptor failed");
                 sprintf(buffer_out, "%s: %s\n", name, msg);
                 printf("%s", buffer_out);
                 command = 1;
             }
             if (n_tokens == 2) {
                 if (strcmp(tokens[0], "/join") == 0) {
-                    if (add_client_to_channel(tokens[1], cli)) {
+                    if (add_client_to_channel(tokens[1], client)) {
 
                         sprintf(buffer_out, "%s joined channel %s\n", name, tokens[1]);
-                        validate_expression(write(cli->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
+                        validate_expression(write(client->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
                         printf("%s", buffer_out);
                     }
                     else {
                         sprintf(buffer_out, "channel %s is invalid or full\n", tokens[1]);
-                        validate_expression(write(cli->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
+                        validate_expression(write(client->sockfd, buffer_out, BUFF_LEN), "ERROR: write to descriptor failed");
                         printf("%s", buffer_out);
                     }
                     command = 1;
                 }
                 else if (strcmp(tokens[0], "/nickname") == 0) {
-                    sprintf(buffer_out, "%s nickname updated to %s\n", cli->name, tokens[1]);
-                    strcpy(cli->name, tokens[1]);
+                    sprintf(buffer_out, "%s nickname updated to %s\n", client->name, tokens[1]);
+                    strcpy(client->name, tokens[1]);
                     printf("%s", buffer_out);
-                    send_message(buffer_out, cli);
+                    send_message(buffer_out, client);
                     command = 1;
                 }
-                else if (cli->is_admin && (strcmp(tokens[0], "/kick") == 0 || strcmp(tokens[0], "/mute") == 0 || strcmp(tokens[0], "/unmute") == 0 || strcmp(tokens[0], "/whois") == 0)) {
+                else if (client->is_admin && (strcmp(tokens[0], "/kick") == 0 || strcmp(tokens[0], "/mute") == 0 || strcmp(tokens[0], "/unmute") == 0 || strcmp(tokens[0], "/whois") == 0)) {
                     printf("command admin");
                     int adm_idx;
-                    int adm_cnl = find_channel_and_client(cli->name, &adm_idx);
+                    int adm_cnl = find_channel_and_client(client->name, &adm_idx);
 
                     int cli_idx;
                     tokens[1][strlen(tokens[1])] = '\0';
@@ -383,36 +392,36 @@ void* handle_client(void *arg) {
                         continue;
                     }
                     if (strcmp(tokens[0], "/kick") == 0) {
-                        int i = find_client(channels[cnl_idx]->connected_cli[cli_idx]);
+                        int i = find_client(channels[cnl_idx]->connected_clients[cli_idx]);
                         
-                        sprintf(buffer_out, "%s was kicked from channel '%s' by admin '%s'\n", clients[i]->name, channels[adm_cnl]->key, cli->name);
-                        send_message(buffer_out, cli);
+                        sprintf(buffer_out, "%s was kicked from channel '%s' by admin '%s'\n", clients[i]->name, channels[adm_cnl]->key, client->name);
+                        send_message(buffer_out, client);
                         printf("%s", buffer_out);
 
                         pthread_mutex_lock(&clients_mutex);
-                        channels[cnl_idx]->connected_cli[cli_idx]->kick = 1;
+                        channels[cnl_idx]->connected_clients[cli_idx]->kick = 1;
                         pthread_mutex_unlock(&clients_mutex);
 
                         command = 1;
                     }
                     else if (strcmp(tokens[0], "/mute") == 0) {
-                        channels[cnl_idx]->connected_cli[cli_idx]->is_muted = 1;
+                        channels[cnl_idx]->connected_clients[cli_idx]->is_muted = 1;
                         command = 1;
                     }
                     else if (strcmp(tokens[0], "/unmute") == 0) {
-                        channels[cnl_idx]->connected_cli[cli_idx]->is_muted = 0;
+                        channels[cnl_idx]->connected_clients[cli_idx]->is_muted = 0;
                         command = 1;
                     }
                     else if (strcmp(tokens[0], "/whois") == 0) {
-                        sprintf(buffer_out, "%s IPv4 is %s\n", tokens[1], inet_ntoa(channels[cnl_idx]->connected_cli[cli_idx]->address.sin_addr));
-                        validate_expression(write(cli->sockfd, buffer_out, BUFF_LEN),"ERROR: write to descriptor failed");
+                        sprintf(buffer_out, "%s IPv4 is %s\n", tokens[1], inet_ntoa(channels[cnl_idx]->connected_clients[cli_idx]->address.sin_addr));
+                        validate_expression(write(client->sockfd, buffer_out, BUFF_LEN),"ERROR: write to descriptor failed");
                         command = 1;
                     }
                 }
             }
             if (!command) {
-                sprintf(buffer_out, "%s: %s\n", cli->name, msg);
-                send_message(buffer_out, cli);
+                sprintf(buffer_out, "%s: %s\n", client->name, msg);
+                send_message(buffer_out, client);
                 printf("%s",buffer_out);
             }
             for (int i = 0; tokens[i]; i++)
@@ -420,24 +429,24 @@ void* handle_client(void *arg) {
             free(tokens);
         }
         else if(receive == 0 || strcmp(msg, "/quit") == 0) {
-            sprintf(buffer_out, "%s has left\n", cli->name);
+            sprintf(buffer_out, "%s has left\n", client->name);
             printf("%s", buffer_out);
-            send_message(buffer_out, cli);
-            cli->kick = 1;
+            send_message(buffer_out, client);
+            client->kick = 1;
         }
         else {
             printf("ERROR: -1\n");
-            cli->kick = 1;
+            client->kick = 1;
         }
         bzero(msg, MSG_LEN);
         bzero(buffer_out, BUFF_LEN);
     }
 
-    int idx = find_channel_of_client(cli);
-    close(cli->sockfd);
-    queue_remove(cli->uid);
-    if (idx != -1) remove_client_from_channel(idx, cli);
-    free(cli);
+    int idx = find_channel_of_client(client);
+    close(client->sockfd);
+    dequeue_client(client->uid);
+    if (idx != -1) remove_client_from_channel(idx, client);
+    free(client);
     pthread_detach(pthread_self());
     return NULL;
 }
