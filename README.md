@@ -5,4 +5,4 @@
 - Raphael David Leveque - 12542522
 - Thaís Ribeiro Lauriano - 12542518
 
-[Vídeo de Apresentação](https://youtu.be/H5n2P3xDprM)
+[Vídeo de Apresentação](https://youtu.be/IJmhSEQqZvU)
